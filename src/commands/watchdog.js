@@ -72,6 +72,11 @@ async function check() {
   const report = [];
 
   for (const r of config.runners) {
+    if (r.isolation && r.isolation !== "host") {
+      // Isolated runners live inside a VM/container managed by their daemon;
+      // the service manager's restart policy covers the daemon itself.
+      continue;
+    }
     if (listenerRunning(r.repo)) {
       report.push(`${r.repo}: listener ok`);
       continue;

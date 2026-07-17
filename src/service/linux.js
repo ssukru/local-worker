@@ -14,7 +14,10 @@ const systemctl = (...args) =>
 
 const quote = (a) => `"${a.replaceAll('"', '\\"')}"`;
 
-export function buildService({ label, programArgs, workingDir, logPath, keepAlive }) {
+export function buildService({ label, programArgs, workingDir, logPath, keepAlive, env = {} }) {
+  const envLines = Object.entries(env)
+    .map(([k, v]) => `Environment=${quote(`${k}=${v}`)}\n`)
+    .join("");
   return `[Unit]
 Description=local-worker ${label}
 After=network-online.target
@@ -24,7 +27,7 @@ ${keepAlive ? "Restart=always\nRestartSec=5\n" : "Type=oneshot\n"}ExecStart=${pr
 ${workingDir ? `WorkingDirectory=${workingDir}\n` : ""}StandardOutput=append:${logPath}
 StandardError=append:${logPath}
 Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/home/linuxbrew/.linuxbrew/bin
-
+${envLines}
 [Install]
 WantedBy=default.target
 `;
@@ -54,6 +57,7 @@ export function install(spec) {
     unitPath(serviceName),
     buildService({ ...spec, keepAlive: spec.keepAlive && !spec.startInterval })
   );
+  fs.chmodSync(unitPath(serviceName), 0o600); // may carry GH_TOKEN in Environment=
   let target = serviceName;
   if (spec.startInterval) {
     target = `${spec.label}.timer`;

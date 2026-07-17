@@ -12,7 +12,10 @@ const plistPath = (label) => path.join(AGENTS_DIR, `${label}.plist`);
 const esc = (s) =>
   s.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 
-export function buildPlist({ label, programArgs, workingDir, logPath, keepAlive, startInterval }) {
+export function buildPlist({ label, programArgs, workingDir, logPath, keepAlive, startInterval, env = {} }) {
+  const envEntries = Object.entries(env)
+    .map(([k, v]) => `      <key>${esc(k)}</key>\n      <string>${esc(v)}</string>`)
+    .join("\n");
   const args = programArgs.map((a) => `      <string>${esc(a)}</string>`).join("\n");
   const extras = [];
   if (keepAlive) {
@@ -49,6 +52,7 @@ ${args}
       <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
       <key>LANG</key>
       <string>en_US.UTF-8</string>
+${envEntries}
     </dict>
 ${extras.join("\n")}
   </dict>
@@ -65,6 +69,7 @@ export function install(spec) {
   const file = plistPath(spec.label);
   unload(spec.label, file);
   fs.writeFileSync(file, buildPlist(spec));
+  fs.chmodSync(file, 0o600); // may carry GH_TOKEN in EnvironmentVariables
   const res = launchctl("bootstrap", `gui/${uid()}`, file);
   if (res.status !== 0) {
     const legacy = launchctl("load", "-w", file);

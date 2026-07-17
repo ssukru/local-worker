@@ -15,9 +15,10 @@ export function ensureDirs() {
   }
 }
 
-/** Run a command, capture stdout, throw on failure. */
+/** Run a command, capture stdout, throw on failure. Returns "" when stdout is inherited. */
 export function sh(cmd, args = [], opts = {}) {
-  return execFileSync(cmd, args, { encoding: "utf8", ...opts }).trim();
+  const out = execFileSync(cmd, args, { encoding: "utf8", ...opts });
+  return out == null ? "" : out.trim();
 }
 
 /** Run a command, capture stdout, return null on failure instead of throwing. */

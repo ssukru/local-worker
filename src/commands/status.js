@@ -16,8 +16,9 @@ export async function status() {
   }
 
   for (const r of config.runners) {
+    const isolated = r.isolation && r.isolation !== "host";
     const service = svc.isLoaded(runnerLabel(r.repo));
-    const listening = listenerRunning(r.repo);
+    const listening = isolated || listenerRunning(r.repo);
     const remote = remoteRunners(r.repo);
     const mine = remote?.find((x) => x.name === r.name);
 
@@ -35,8 +36,11 @@ export async function status() {
       `${pc.bold(r.repo)}\n` +
         `  runner name   ${r.name}\n` +
         `  labels        self-hosted, ${osLabel()} + ${r.labels.join(", ")}\n` +
-        `  service       ${service ? pc.green("loaded") : pc.red("not loaded")}   ` +
-        `listener ${listening ? pc.green("running") : pc.red("stopped")}\n` +
+        (isolated
+          ? `  isolation     ${r.isolation} · refresh ${r.vm.refresh} (details: lw vm status)\n` +
+            `  daemon        ${service ? pc.green("running") : pc.red("not running")}\n`
+          : `  service       ${service ? pc.green("loaded") : pc.red("not loaded")}   ` +
+            `listener ${listening ? pc.green("running") : pc.red("stopped")}\n`) +
         `  github sees   ${github}`
     );
   }

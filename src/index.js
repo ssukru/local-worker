@@ -6,6 +6,7 @@ import { remove } from "./commands/remove.js";
 import { status } from "./commands/status.js";
 import { doctor } from "./commands/doctor.js";
 import { watchdog } from "./commands/watchdog.js";
+import { vm } from "./commands/vm.js";
 import { integrate } from "./commands/integrate.js";
 import { logs } from "./commands/logs.js";
 
@@ -22,11 +23,15 @@ ${pc.bold("Commands:")}
   doctor                   Diagnose machine readiness (power, tools, network)
   watchdog <install|uninstall|check|status>
                            Self-healing health checks + dead-man's-switch ping
+  vm <status|refresh>      Manage isolated (VM/container) runner environments
   integrate <owner/repo>   Print the workflow changes to route jobs here
   logs [owner/repo]        Tail runner / watchdog logs
 
 ${pc.bold("Common flags:")}
   --labels a,b,c           Extra runner labels (add)
+  --isolation <mode>       add: host (default) | vm (Tart, Apple Silicon) | container (Docker)
+  --vm-image <image>       add: base image for vm/container isolation
+  --refresh <policy>       add: never (default) | per-job | interval like 24h
   --yes                    Skip confirmations (non-interactive)
 
 Config and runner instances live in ${pc.cyan("~/.local-worker")} — the repo itself stays clean.
@@ -45,6 +50,7 @@ export async function main(argv) {
     case "status": return status(flags);
     case "doctor": return doctor(flags);
     case "watchdog": return watchdog(args[1], flags);
+    case "vm": return vm(args[1], args[2], flags);
     case "integrate": return integrate(args[1], flags);
     case "logs": return logs(args[1], flags);
     case undefined:
@@ -60,7 +66,7 @@ export async function main(argv) {
 }
 
 // Flags that take a value; everything else is boolean.
-const VALUE_FLAGS = new Set(["labels", "name", "interval", "healthchecks"]);
+const VALUE_FLAGS = new Set(["labels", "name", "interval", "healthchecks", "isolation", "vm-image", "refresh"]);
 
 function parseArgv(argv) {
   const args = [];

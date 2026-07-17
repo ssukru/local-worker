@@ -39,9 +39,21 @@ export async function remove(repo, flags = {}) {
   uninstallRunnerService(repo);
   s.stop("Service removed");
 
-  s.start("Deregistering from GitHub and deleting local files");
-  deregisterRunner(repo);
-  s.stop("Deregistered");
+  if (entry?.isolation && entry.isolation !== "host") {
+    s.start(`Discarding ${entry.isolation} environment and deregistering`);
+    const { deleteVm, vmName, clearVmState, forceDeregister } = await import("../vm.js");
+    const { deleteContainer, containerName } = await import("../container.js");
+    const name = entry.isolation === "container" ? containerName(repo) : vmName(repo);
+    if (entry.isolation === "container") deleteContainer(name);
+    else deleteVm(name);
+    clearVmState(name);
+    forceDeregister(repo, entry.name);
+    s.stop("Environment discarded, runner deregistered");
+  } else {
+    s.start("Deregistering from GitHub and deleting local files");
+    deregisterRunner(repo);
+    s.stop("Deregistered");
+  }
 
   config.runners = config.runners.filter(
     (r) => r.repo.toLowerCase() !== repo.toLowerCase()

@@ -103,22 +103,68 @@ outage just delays the job, it doesn't fail it.
 - Repo secrets pass through this machine during jobs. Treat it like a
   production box: screen lock for humans, no random software.
 
-### Isolation options, weakest to strongest
+## Isolation
 
-1. **Dedicated user account** (recommended minimum): create a standard,
-   non-admin `ci` user, log in as it, run `./install.sh` there. Jobs can't
-   read your personal files or keychain, and `sudo` is off the table.
-2. **Dedicated machine**: the spare-Mac scenario this tool is built for —
-   nothing personal lives on the box at all.
-3. **Ephemeral VMs** (macOS): [Tart](https://tart.run) boots a throwaway
-   macOS VM per job — the strongest isolation, at the cost of disk, RAM and
-   per-job VM boot time. Not integrated into local-worker (yet); if your
-   repos run untrusted code, start there.
-4. On **Linux**, running the runner inside a Docker container gives similar
-   per-job disposability cheaply.
+By default runners execute jobs directly on the host (`--isolation host`) —
+fastest, full toolchain access, right for trusted code on a dedicated
+machine. When you want walls, local-worker can run the runner inside a
+disposable environment instead:
 
-For a personal Mac running jobs from your *own* private repos, option 1 or 2
-is the sensible trade-off.
+```bash
+lw add owner/repo --isolation vm                       # Tart macOS VM (Apple Silicon hosts)
+lw add owner/repo --isolation container                # Docker container (Linux hosts, or macOS via OrbStack/Colima)
+```
+
+How often the environment is thrown away and rebuilt from its base image is a
+separate dial — pick the trade-off you want:
+
+| `--refresh` | Behaviour | Protects against | Cost |
+| --- | --- | --- | --- |
+| `never` (default) | one environment, reused forever | host compromise | caches persist — fastest |
+| `24h` (any `<n>h`) | auto-rebuilt on an interval | host compromise + limits how long an implant can live | cache lost on each rebuild |
+| `per-job` | fresh clone per job, discarded after | host compromise + **cross-job persistence** | cold caches + boot time per job |
+
+`lw vm status` shows environment age and job counts; `lw vm refresh owner/repo`
+discards one immediately (a clean clone comes back on its own).
+
+**Why per-job matters:** isolation stops a malicious job from touching your
+machine, but in a *reused* environment it can still plant a backdoor or poison
+caches, then quietly harvest the secrets of every **later** job (deploy keys,
+registry tokens) — or inject code into artifacts you ship. Throwing the
+environment away after each job caps the blast radius at that one job.
+
+Choosing:
+- **Own private repos, dedicated machine** → `host`, or a dedicated non-admin
+  `ci` user account. Isolation buys you little here; speed matters more.
+- **Semi-trusted code / peace of mind** → `vm`/`container` with `never` or an
+  interval — host is protected, caches mostly survive.
+- **Anything public or untrusted** → `per-job`, no exceptions.
+
+Notes: VM isolation needs [Tart](https://tart.run) (`brew install
+cirruslabs/cli/tart`) + `sshpass`, an Apple Silicon Mac, and disk for base
+images (Ubuntu ~2 GB, macOS ~25 GB, macOS+Xcode ~60 GB). Container isolation
+uses GitHub's official runner image by default; jobs inside it cannot use
+Docker themselves (mounting the host socket would defeat the isolation).
+macOS VMs: Apple licensing allows 2 concurrent VMs per host.
+
+## Running public repos (read this first)
+
+A self-hosted runner executes whatever workflow code reaches it. On a public
+repo, that can include a stranger's fork PR. If you must attach one, treat it
+as hostile input — all of the following, together:
+
+1. **Settings → Actions**: require approval for **all outside collaborators**
+   (the default only gates *first-time* contributors — one merged typo fix
+   and they run unreviewed), and keep fork PRs away from self-hosted jobs.
+2. **`--isolation vm|container --refresh per-job`** so nothing survives
+   between jobs.
+3. Remember fork PRs get no repo secrets and a read-only token — keep it that
+   way; never add `pull_request_target` workflows that expose secrets to
+   fork-controlled code.
+
+`lw add` warns and asks for explicit confirmation before attaching a public
+repo. Private repos: the walls still help (a compromised dependency in your
+own build is the same attack), but you choose the speed/paranoia trade-off.
 
 ## Building linux/amd64 Docker images on Apple Silicon
 

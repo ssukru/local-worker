@@ -15,11 +15,10 @@ import {
 } from "./util.js";
 import { svc } from "./service/index.js";
 
-/** Resolve the download URL for the latest actions/runner build for this machine. */
-export function latestRunnerAsset() {
-  const arch = machineArch();
+/** Resolve the latest actions/runner download for this machine (or a given os-arch slug). */
+export function latestRunnerAsset(slug) {
   const release = ghJson(["repos/actions/runner/releases/latest"]);
-  const wanted = `${runnerOsSlug()}-${arch}`;
+  const wanted = slug || `${runnerOsSlug()}-${machineArch()}`;
   const asset = release.assets.find(
     (a) =>
       a.name.startsWith(`actions-runner-${wanted}-`) &&

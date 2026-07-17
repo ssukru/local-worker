@@ -9,7 +9,12 @@ import {
   installRunnerService,
   remoteRunners,
 } from "../runner.js";
-import { sh, trySh, ghAuthed, ghLogin, machineArch, osLabel, isTTY, timestamp, repoId } from "../util.js";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { sh, trySh, ghAuthed, ghLogin, machineArch, osLabel, isTTY, timestamp, repoId, runnerLabel, LOGS_DIR } from "../util.js";
+import { svc } from "../service/index.js";
+import { assertVmSupport, DEFAULT_IMAGES, validRefresh } from "../vm.js";
+import { assertContainerSupport, DEFAULT_CONTAINER_IMAGE } from "../container.js";
 
 const DEFAULT_LABELS = ["local-worker"];
 
@@ -93,8 +98,12 @@ export async function add(repoArg, flags = {}, { quietIntro = false } = {}) {
   if (!info.private) {
     p.log.warn(
       `${repo} is ${pc.yellow("PUBLIC")}. Self-hosted runners on public repos can be attacked via fork PRs.\n` +
-        `If you continue: in repo Settings → Actions, restrict which workflows can run and\n` +
-        `never allow pull_request workflows from forks to reach this runner.`
+        `If you continue, do BOTH of these:\n` +
+        `  1. Settings → Actions: require approval for ALL outside collaborators,\n` +
+        `     and never let fork pull_request workflows reach this runner.\n` +
+        `  2. Use throwaway isolation so nothing survives between jobs:\n` +
+        `       lw add ${repo} --isolation ${process.platform === "darwin" ? "vm" : "container"} --refresh per-job\n` +
+        `See the Security section of the README for the full threat model.`
     );
     if (isTTY() && !flags.yes) {
       const ok = await p.confirm({ message: "Continue anyway?", initialValue: false });
@@ -110,6 +119,16 @@ export async function add(repoArg, flags = {}, { quietIntro = false } = {}) {
     ? String(flags.labels).split(",").map((l) => l.trim()).filter(Boolean)
     : DEFAULT_LABELS;
   const name = flags.name || `${machineName()}-${repoId(repo).slice(0, 40)}`;
+
+  const isolation = flags.isolation || "host";
+  if (!["host", "vm", "container"].includes(isolation)) {
+    p.log.error(`Unknown isolation mode "${isolation}" — use host, vm or container.`);
+    process.exitCode = 1;
+    return;
+  }
+  if (isolation !== "host") {
+    return addIsolated({ repo, name, labels: extraLabels, isolation, flags, config, quietIntro });
+  }
 
   const s = p.spinner();
   s.start("Downloading the GitHub Actions runner");
@@ -154,6 +173,60 @@ export async function add(repoArg, flags = {}, { quietIntro = false } = {}) {
       `Run ${pc.cyan(`lw integrate ${repo}`)} for a copy-paste patch with a\n` +
       `hosted-runner fallback input.`,
     "Next step"
+  );
+  if (!quietIntro) p.outro("Done.");
+}
+
+/** VM (tart) or container (docker) isolated runner: a daemon owns the lifecycle. */
+async function addIsolated({ repo, name, labels, isolation, flags, config, quietIntro }) {
+  try {
+    if (isolation === "vm") assertVmSupport();
+    else assertContainerSupport();
+  } catch (err) {
+    p.log.error(err.message);
+    process.exitCode = 1;
+    return;
+  }
+
+  const refresh = String(flags.refresh || "never");
+  if (!validRefresh(refresh)) {
+    p.log.error(`Invalid --refresh "${refresh}" — use never, per-job, or an interval like 24h.`);
+    process.exitCode = 1;
+    return;
+  }
+  const image =
+    flags["vm-image"] ||
+    (isolation === "vm" ? DEFAULT_IMAGES["macos-base"] : DEFAULT_CONTAINER_IMAGE);
+
+  const entry = {
+    repo,
+    name,
+    labels,
+    isolation,
+    vm: { image, refresh },
+    addedAt: timestamp(),
+    addedBy: ghLogin(),
+  };
+  config.runners = config.runners.filter((r) => r.repo.toLowerCase() !== repo.toLowerCase());
+  config.runners.push(entry);
+  saveConfig(config);
+
+  const label = runnerLabel(repo);
+  const cli = fileURLToPath(new URL("../../bin/lw.js", import.meta.url));
+  svc.install({
+    label,
+    programArgs: [process.execPath, cli, "vm", "daemon", repo],
+    logPath: path.join(LOGS_DIR, `${label}.log`),
+    keepAlive: true,
+    // Service managers can't reach gh's keyring; the daemon needs the token
+    // to mint registration tokens (hourly for per-job runners).
+    env: { GH_TOKEN: sh("gh", ["auth", "token"]) },
+  });
+
+  p.log.success(`${isolation} daemon installed for ${repo} (image: ${image}, refresh: ${refresh})`);
+  p.log.info(
+    `First start pulls the image${isolation === "vm" ? " — macOS images are 20-60 GB, this can take a while" : ""}.\n` +
+      `Watch progress with ${pc.cyan(`lw logs ${repo}`)}; the runner appears in ${pc.cyan("lw status")} when ready.`
   );
   if (!quietIntro) p.outro("Done.");
 }
