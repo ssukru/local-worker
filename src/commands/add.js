@@ -9,12 +9,14 @@ import {
   installRunnerService,
   remoteRunners,
 } from "../runner.js";
-import { sh, ghAuthed, ghLogin, machineArch, isTTY, timestamp, repoId } from "../util.js";
+import { sh, trySh, ghAuthed, ghLogin, machineArch, isTTY, timestamp, repoId } from "../util.js";
 
 const DEFAULT_LABELS = ["local-worker"];
 
 function machineName() {
-  return os.hostname().replace(/\.local$/, "").toLowerCase();
+  // os.hostname() can be a bare IP on home networks; the Mac's set name is stable.
+  const name = trySh("scutil", ["--get", "LocalHostName"]) || os.hostname();
+  return name.replace(/\.local$/, "").toLowerCase();
 }
 
 export async function pickRepo() {
