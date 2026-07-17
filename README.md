@@ -1,6 +1,7 @@
 # local-worker
 
-Turn a spare Mac into a free, always-on CI machine for your GitHub repos.
+Turn a spare Mac (or Linux box) into a free, always-on CI machine for your
+GitHub repos.
 
 Your workflows stay in GitHub Actions (same YAML, same secrets, same UI) — but
 jobs execute on your own hardware. GitHub charges **nothing** for self-hosted
@@ -17,7 +18,20 @@ you (git push / manual dispatch)
    your Mac (lw)    ← runs the job: build, test, deploy, xcodebuild…
 ```
 
-## Install (on the Mac that will do the work)
+## Platform support
+
+| Platform | Status | Services via | Notes |
+| --- | --- | --- | --- |
+| macOS (Apple Silicon & Intel) | ✅ first-class | launchd LaunchAgents | only platform that can build iOS |
+| Linux (systemd distros) | ✅ supported | systemd user units | native amd64 Docker builds |
+| Windows | via WSL2 | systemd (inside WSL) | see below; native support: PRs welcome |
+
+**Windows / WSL2:** `wsl --install -d Ubuntu`, enable systemd in `/etc/wsl.conf`
+(`[boot]` → `systemd=true`), then clone this repo inside WSL and run
+`./install.sh`. Your jobs run in Linux — the same environment as GitHub's
+`ubuntu-*` hosted runners.
+
+## Install (on the machine that will do the work)
 
 ```bash
 git clone https://github.com/ssukru/local-worker.git
@@ -85,9 +99,26 @@ outage just delays the job, it doesn't fail it.
   workflow tells it to; on public repos, fork PRs are a code-execution vector.
   `lw add` warns loudly and makes you confirm before attaching a public repo.
 - Runners run as your user, unsandboxed (that's what makes Xcode/simulator
-  builds work). Dedicate a user account — or the whole Mac — to CI.
+  builds work). Dedicate a user account — or the whole machine — to CI.
 - Repo secrets pass through this machine during jobs. Treat it like a
   production box: screen lock for humans, no random software.
+
+### Isolation options, weakest to strongest
+
+1. **Dedicated user account** (recommended minimum): create a standard,
+   non-admin `ci` user, log in as it, run `./install.sh` there. Jobs can't
+   read your personal files or keychain, and `sudo` is off the table.
+2. **Dedicated machine**: the spare-Mac scenario this tool is built for —
+   nothing personal lives on the box at all.
+3. **Ephemeral VMs** (macOS): [Tart](https://tart.run) boots a throwaway
+   macOS VM per job — the strongest isolation, at the cost of disk, RAM and
+   per-job VM boot time. Not integrated into local-worker (yet); if your
+   repos run untrusted code, start there.
+4. On **Linux**, running the runner inside a Docker container gives similar
+   per-job disposability cheaply.
+
+For a personal Mac running jobs from your *own* private repos, option 1 or 2
+is the sensible trade-off.
 
 ## Building linux/amd64 Docker images on Apple Silicon
 

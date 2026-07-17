@@ -2,25 +2,24 @@ import fs from "node:fs";
 import path from "node:path";
 import {
   RUNNERS_DIR,
+  LOGS_DIR,
   ROOT,
   sh,
   trySh,
   ghJson,
   repoId,
   runnerLabel,
-  agentPlistPath,
-  loadAgent,
-  unloadAgent,
   machineArch,
+  runnerOsSlug,
   ensureDirs,
 } from "./util.js";
-import { runnerPlist } from "./plist.js";
+import { svc } from "./service/index.js";
 
-/** Resolve the download URL for the latest actions/runner build for this Mac. */
+/** Resolve the download URL for the latest actions/runner build for this machine. */
 export function latestRunnerAsset() {
   const arch = machineArch();
   const release = ghJson(["repos/actions/runner/releases/latest"]);
-  const wanted = `osx-${arch}`;
+  const wanted = `${runnerOsSlug()}-${arch}`;
   const asset = release.assets.find(
     (a) =>
       a.name.startsWith(`actions-runner-${wanted}-`) &&
@@ -96,18 +95,19 @@ export function configureRunner({ repo, name, labels, distDir }) {
 
 export function installRunnerService(repo) {
   const label = runnerLabel(repo);
-  const plistPath = agentPlistPath(label);
-  unloadAgent(label, plistPath);
-  fs.writeFileSync(plistPath, runnerPlist(label, runnerDir(repo)));
-  loadAgent(plistPath);
+  const dir = runnerDir(repo);
+  svc.install({
+    label,
+    programArgs: [path.join(dir, "run.sh")],
+    workingDir: dir,
+    logPath: path.join(LOGS_DIR, `${label}.log`),
+    keepAlive: true,
+  });
   return label;
 }
 
 export function uninstallRunnerService(repo) {
-  const label = runnerLabel(repo);
-  const plistPath = agentPlistPath(label);
-  unloadAgent(label, plistPath);
-  fs.rmSync(plistPath, { force: true });
+  svc.uninstall(runnerLabel(repo));
 }
 
 /** Deregister from GitHub and delete the local instance directory. */

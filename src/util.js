@@ -8,10 +8,9 @@ export const ROOT = path.join(HOME, ".local-worker");
 export const RUNNERS_DIR = path.join(ROOT, "runners");
 export const LOGS_DIR = path.join(ROOT, "logs");
 export const CONFIG_PATH = path.join(ROOT, "config.json");
-export const AGENTS_DIR = path.join(HOME, "Library", "LaunchAgents");
 
 export function ensureDirs() {
-  for (const dir of [ROOT, RUNNERS_DIR, LOGS_DIR, AGENTS_DIR]) {
+  for (const dir of [ROOT, RUNNERS_DIR, LOGS_DIR]) {
     fs.mkdirSync(dir, { recursive: true });
   }
 }
@@ -50,11 +49,10 @@ export function ghAuthed() {
 }
 
 export function ghLogin() {
-  const out = trySh("gh", ["api", "user", "--jq", ".login"]);
-  return out || null;
+  return trySh("gh", ["api", "user", "--jq", ".login"]);
 }
 
-/** "owner/repo" -> filesystem/launchd-safe id like "owner__repo". */
+/** "owner/repo" -> filesystem/service-safe id like "owner__repo". */
 export function repoId(repo) {
   return repo.replace(/[^a-zA-Z0-9-]/g, "__");
 }
@@ -65,51 +63,22 @@ export function runnerLabel(repo) {
 
 export const WATCHDOG_LABEL = "com.local-worker.watchdog";
 
-export function agentPlistPath(label) {
-  return path.join(AGENTS_DIR, `${label}.plist`);
-}
-
-export function uid() {
-  return process.getuid();
-}
-
-export function launchctl(...args) {
-  return spawnSync("launchctl", args, { encoding: "utf8" });
-}
-
-/** Is a launchd job loaded in the current GUI session? */
-export function agentLoaded(label) {
-  return launchctl("print", `gui/${uid()}/${label}`).status === 0;
-}
-
-export function loadAgent(plistPath) {
-  // bootstrap is the modern API; `load -w` is the fallback for older macOS.
-  const res = launchctl("bootstrap", `gui/${uid()}`, plistPath);
-  if (res.status !== 0) {
-    const legacy = launchctl("load", "-w", plistPath);
-    if (legacy.status !== 0) {
-      throw new Error(
-        `launchctl failed to load ${plistPath}:\n${res.stderr}${legacy.stderr}`
-      );
-    }
-  }
-}
-
-export function unloadAgent(label, plistPath) {
-  if (agentLoaded(label)) {
-    const res = launchctl("bootout", `gui/${uid()}/${label}`);
-    if (res.status !== 0) launchctl("unload", "-w", plistPath);
-  }
-}
-
-export function kickstartAgent(label) {
-  return launchctl("kickstart", "-k", `gui/${uid()}/${label}`).status === 0;
-}
-
 export function machineArch() {
-  // Report arm64 even when Node itself runs under Rosetta.
-  if (process.arch === "arm64") return "arm64";
-  return trySh("sysctl", ["-n", "hw.optional.arm64"]) === "1" ? "arm64" : "x64";
+  if (process.platform === "darwin" && process.arch !== "arm64") {
+    // Node itself may be running under Rosetta on an Apple Silicon Mac.
+    return trySh("sysctl", ["-n", "hw.optional.arm64"]) === "1" ? "arm64" : "x64";
+  }
+  return process.arch === "arm64" ? "arm64" : "x64";
+}
+
+/** OS slug as used in actions/runner release asset names. */
+export function runnerOsSlug() {
+  return process.platform === "darwin" ? "osx" : "linux";
+}
+
+/** Human label GitHub auto-assigns to runners on this OS. */
+export function osLabel() {
+  return process.platform === "darwin" ? "macOS" : "Linux";
 }
 
 export function isTTY() {

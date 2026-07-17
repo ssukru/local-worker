@@ -1,23 +1,11 @@
-import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import * as p from "@clack/prompts";
 import pc from "picocolors";
 import { loadConfig, saveConfig } from "../config.js";
 import { listenerRunning, remoteRunners } from "../runner.js";
-import {
-  WATCHDOG_LABEL,
-  agentPlistPath,
-  loadAgent,
-  unloadAgent,
-  agentLoaded,
-  kickstartAgent,
-  runnerLabel,
-  trySh,
-  timestamp,
-  isTTY,
-} from "../util.js";
-import { watchdogPlist } from "../plist.js";
+import { WATCHDOG_LABEL, LOGS_DIR, runnerLabel, trySh, timestamp, isTTY } from "../util.js";
+import { svc } from "../service/index.js";
 
 const CLI_ENTRY = fileURLToPath(new URL("../../bin/lw.js", import.meta.url));
 
@@ -29,7 +17,7 @@ export async function watchdog(sub, flags = {}) {
     case "status":
     default:
       console.log(
-        agentLoaded(WATCHDOG_LABEL)
+        svc.isLoaded(WATCHDOG_LABEL)
           ? "watchdog: active"
           : "watchdog: not running (lw watchdog install)"
       );
@@ -44,7 +32,7 @@ async function install(flags) {
   if (isTTY() && flags.healthchecks === undefined) {
     p.log.info(
       "The watchdog restarts dead runners and pings a dead-man's-switch URL.\n" +
-        "If this Mac goes fully offline, the missing pings trigger the alert —\n" +
+        "If this machine goes fully offline, the missing pings trigger the alert —\n" +
         "create a free check at https://healthchecks.io and paste its ping URL."
     );
     const url = await p.text({
@@ -60,26 +48,25 @@ async function install(flags) {
   config.watchdog = { ...config.watchdog, installed: true, intervalSeconds: interval, healthchecksUrl };
   saveConfig(config);
 
-  const plistPath = agentPlistPath(WATCHDOG_LABEL);
-  unloadAgent(WATCHDOG_LABEL, plistPath);
-  fs.writeFileSync(
-    plistPath,
-    watchdogPlist(WATCHDOG_LABEL, process.execPath, CLI_ENTRY, interval)
-  );
-  loadAgent(plistPath);
+  svc.uninstall(WATCHDOG_LABEL);
+  svc.install({
+    label: WATCHDOG_LABEL,
+    programArgs: [process.execPath, CLI_ENTRY, "watchdog", "check"],
+    logPath: path.join(LOGS_DIR, `${WATCHDOG_LABEL}.log`),
+    startInterval: interval,
+  });
   p.outro(`Watchdog active — every ${interval}s${healthchecksUrl ? " + offline alerts via healthchecks.io" : ""}.`);
 }
 
 async function uninstall() {
   const config = loadConfig();
-  unloadAgent(WATCHDOG_LABEL, agentPlistPath(WATCHDOG_LABEL));
-  fs.rmSync(agentPlistPath(WATCHDOG_LABEL), { force: true });
+  svc.uninstall(WATCHDOG_LABEL);
   config.watchdog.installed = false;
   saveConfig(config);
   console.log("Watchdog removed.");
 }
 
-/** One health pass. Runs headless from launchd — plain console output only. */
+/** One health pass. Runs headless from the service manager — plain output only. */
 async function check() {
   const config = loadConfig();
   const report = [];
@@ -89,8 +76,8 @@ async function check() {
       report.push(`${r.repo}: listener ok`);
       continue;
     }
-    // Listener is dead: kick the launchd job (KeepAlive usually beats us to it).
-    const kicked = kickstartAgent(runnerLabel(r.repo));
+    // Listener is dead: kick the service (its own restart policy usually beats us).
+    const kicked = svc.kickstart(runnerLabel(r.repo));
     report.push(`${r.repo}: listener DOWN — kickstart ${kicked ? "ok" : "FAILED"}`);
     await notify(config, `local-worker: runner for ${r.repo} was down — restart ${kicked ? "succeeded" : "FAILED"}`);
   }

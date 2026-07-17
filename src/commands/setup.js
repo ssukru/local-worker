@@ -45,8 +45,10 @@ export async function setup(flags = {}) {
     else if (c.level === "warn") p.log.warn(c.msg);
     else p.log.error(c.msg);
   }
-  const powerIssues = checks.some((c) => c.level !== "ok" && /sleep|Auto-restart/i.test(c.msg));
-  if (powerIssues) {
+  const powerIssues = checks.some(
+    (c) => c.level !== "ok" && /sleep|Auto-restart|Linger|suspend/i.test(c.msg)
+  );
+  if (powerIssues && process.platform === "darwin") {
     const fix = await p.confirm({
       message: "Apply recommended power settings now? (runs sudo pmset — you'll be asked for your password)",
     });
@@ -54,6 +56,15 @@ export async function setup(flags = {}) {
       run("sudo", ["pmset", "-a", "sleep", "0", "disksleep", "0", "displaysleep", "10", "autorestart", "1", "womp", "1"]);
       run("sudo", ["pmset", "-a", "disablesleep", "1"]);
       p.log.success("Power settings applied — this Mac will stay awake, even with the lid closed.");
+    }
+  } else if (powerIssues && process.platform === "linux") {
+    const fix = await p.confirm({
+      message: "Enable lingering + mask suspend targets now? (uses loginctl and sudo systemctl)",
+    });
+    if (!p.isCancel(fix) && fix) {
+      run("loginctl", ["enable-linger", process.env.USER]);
+      run("sudo", ["systemctl", "mask", "sleep.target", "suspend.target", "hibernate.target", "hybrid-sleep.target"]);
+      p.log.success("This machine will stay available for jobs.");
     }
   }
   if (checks.some((c) => c.level === "bad")) {

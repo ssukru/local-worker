@@ -9,13 +9,16 @@ import {
   installRunnerService,
   remoteRunners,
 } from "../runner.js";
-import { sh, trySh, ghAuthed, ghLogin, machineArch, isTTY, timestamp, repoId } from "../util.js";
+import { sh, trySh, ghAuthed, ghLogin, machineArch, osLabel, isTTY, timestamp, repoId } from "../util.js";
 
 const DEFAULT_LABELS = ["local-worker"];
 
 function machineName() {
-  // os.hostname() can be a bare IP on home networks; the Mac's set name is stable.
-  const name = trySh("scutil", ["--get", "LocalHostName"]) || os.hostname();
+  // os.hostname() can be a bare IP on home networks; the OS-level set name is stable.
+  const name =
+    (process.platform === "darwin"
+      ? trySh("scutil", ["--get", "LocalHostName"])
+      : trySh("hostnamectl", ["--static"])) || os.hostname();
   return name.replace(/\.local$/, "").toLowerCase();
 }
 
@@ -33,7 +36,7 @@ export async function pickRepo() {
   s.stop(`Found ${repos.length} repositories`);
 
   const choice = await p.select({
-    message: "Which repository should send jobs to this Mac?",
+    message: "Which repository should send jobs to this machine?",
     options: [
       ...repos.slice(0, 30).map((r) => ({
         value: r.nameWithOwner,
@@ -116,9 +119,9 @@ export async function add(repoArg, flags = {}, { quietIntro = false } = {}) {
 
   s.start(`Registering "${name}" with ${repo}`);
   configureRunner({ repo, name, labels: extraLabels, distDir });
-  s.stop(`Registered with labels: self-hosted, macOS, ${machineArch() === "arm64" ? "ARM64" : "X64"}, ${extraLabels.join(", ")}`);
+  s.stop(`Registered with labels: self-hosted, ${osLabel()}, ${machineArch() === "arm64" ? "ARM64" : "X64"}, ${extraLabels.join(", ")}`);
 
-  s.start("Installing launchd service (starts at login, restarts on crash)");
+  s.start("Installing background service (auto-start, restart on crash)");
   const label = installRunnerService(repo);
   s.stop(`Service loaded: ${label}`);
 
@@ -147,7 +150,7 @@ export async function add(repoArg, flags = {}, { quietIntro = false } = {}) {
 
   p.note(
     `Route jobs here by changing workflows in ${repo}:\n` +
-      `  runs-on: [self-hosted, macOS]\n\n` +
+      `  runs-on: [self-hosted]\n\n` +
       `Run ${pc.cyan(`lw integrate ${repo}`)} for a copy-paste patch with a\n` +
       `hosted-runner fallback input.`,
     "Next step"

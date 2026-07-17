@@ -1,4 +1,5 @@
 import pc from "picocolors";
+import { assertPlatform } from "./service/index.js";
 import { setup } from "./commands/setup.js";
 import { add } from "./commands/add.js";
 import { remove } from "./commands/remove.js";
@@ -9,7 +10,7 @@ import { integrate } from "./commands/integrate.js";
 import { logs } from "./commands/logs.js";
 
 const HELP = `
-${pc.bold("local-worker")} — turn this Mac into a self-hosted GitHub Actions runner fleet
+${pc.bold("local-worker")} — turn this machine into a self-hosted GitHub Actions runner fleet
 
 ${pc.bold("Usage:")} lw <command> [args]
 
@@ -34,6 +35,8 @@ Config and runner instances live in ${pc.cyan("~/.local-worker")} — the repo i
 export async function main(argv) {
   const { args, flags } = parseArgv(argv);
   const cmd = args[0];
+
+  if (cmd && !["help", "--help"].includes(cmd)) assertPlatform();
 
   switch (cmd) {
     case "setup": return setup(flags);
