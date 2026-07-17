@@ -1,0 +1,32 @@
+# End-to-end proof that a Mac attached with `lw add` actually receives and
+# runs jobs. Dispatch it from the Actions tab (or `gh workflow run smoke.yml`).
+name: Self-hosted smoke test
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner:
+        description: Where to run this job
+        type: choice
+        default: self-hosted
+        options:
+          - self-hosted
+          - ubuntu-latest
+
+jobs:
+  smoke:
+    runs-on: ${{ inputs.runner || 'self-hosted' }}
+    timeout-minutes: 5
+    steps:
+      - name: Where am I?
+        run: |
+          echo "runner name : $RUNNER_NAME"
+          echo "os          : $(uname -a)"
+          echo "hostname    : $(hostname)"
+          echo "arch        : $(uname -m)"
+      - name: Tool inventory
+        run: |
+          for tool in git node docker xcodebuild; do
+            printf '%-12s' "$tool"
+            command -v "$tool" >/dev/null && echo "$($tool --version 2>&1 | head -1)" || echo "not installed"
+          done
