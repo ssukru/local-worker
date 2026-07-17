@@ -49,16 +49,25 @@ services that survive reboots.
 | Command | What it does |
 | --- | --- |
 | `lw setup` | Guided first-time setup |
-| `lw add owner/repo` | Attach this Mac as a runner for a repo |
+| `lw add owner/repo` | Attach this machine as a runner for a repo |
 | `lw remove owner/repo` | Deregister + clean up |
 | `lw status` | Local *and* GitHub's view of every runner |
 | `lw doctor` | Diagnose machine readiness (sleep, auto-login, tools…) |
-| `lw watchdog install` | Self-healing checks + offline alerting |
+| `lw watchdog install\|uninstall\|check\|status` | Self-healing checks + offline alerting |
+| `lw vm status\|refresh owner/repo` | Inspect / rebuild isolated environments |
 | `lw integrate owner/repo` | Copy-paste workflow patch to route jobs here |
 | `lw logs [owner/repo]` | Tail a runner's log |
 
+`lw add` flags: `--labels a,b,c` · `--name <runner-name>` ·
+`--isolation host|vm|container` · `--vm-image <image>` ·
+`--refresh never|per-job|<n>h` · `--yes` (non-interactive).
+
 State lives in `~/.local-worker/` (runner instances, logs, config). The
-repo itself stays clean — clone it on as many Macs as you like.
+repo itself stays clean — clone it on as many machines as you like.
+
+Each attached repo gets one runner, and a runner executes one job at a time —
+so different repos run in parallel, while jobs within a repo queue (usually
+what you want for deploys). Multiple runners per repo isn't supported yet.
 
 ## Routing jobs to your Mac
 
@@ -91,17 +100,20 @@ outage just delays the job, it doesn't fail it.
   dedicated CI Mac, consider disabling it.
 - The **watchdog** (`lw watchdog install`) restarts dead runner processes and
   pings a [healthchecks.io](https://healthchecks.io) URL every 5 minutes — if
-  the Mac drops off the internet, the missed pings alert you by email/Telegram.
+  the machine drops off the internet, the missed pings alert you by
+  email/Telegram. For direct Telegram messages when the watchdog restarts a
+  runner, put a bot token + chat id into `~/.local-worker/config.json` under
+  `watchdog.telegram: { "botToken": "…", "chatId": "…" }`.
 
 ## Security notes
 
-- **Private repos only**, ideally. A self-hosted runner executes whatever the
-  workflow tells it to; on public repos, fork PRs are a code-execution vector.
-  `lw add` warns loudly and makes you confirm before attaching a public repo.
-- Runners run as your user, unsandboxed (that's what makes Xcode/simulator
-  builds work). Dedicate a user account — or the whole machine — to CI.
+- Runners run as your user, unsandboxed by default (that's what makes
+  Xcode/simulator builds work). Dedicate a user account — or the whole
+  machine — to CI, or add walls with [Isolation](#isolation) below.
 - Repo secrets pass through this machine during jobs. Treat it like a
   production box: screen lock for humans, no random software.
+- Public repos are a special case — see
+  [Running public repos](#running-public-repos-read-this-first).
 
 ## Isolation
 
@@ -147,6 +159,11 @@ uses GitHub's official runner image by default; jobs inside it cannot use
 Docker themselves (mounting the host socket would defeat the isolation).
 macOS VMs: Apple licensing allows 2 concurrent VMs per host.
 
+> **Maturity:** the `container` backend is tested end-to-end (including the
+> per-job discard/rebuild cycle). The `vm` (Tart) backend shares the same
+> daemon code but has **not yet been exercised on real hardware** — treat it
+> as experimental and please report what you hit.
+
 ## Running public repos (read this first)
 
 A self-hosted runner executes whatever workflow code reaches it. On a public
@@ -175,6 +192,28 @@ Deploying to an x86 server? Two options that avoid slow emulation:
    (`{os: ["linux"], cpu: ["x64"]}`) installs target-platform deps on the Mac.
 2. **Rosetta-backed builds** — OrbStack / Docker Desktop / Colima run amd64
    layers under Rosetta 2, close to native speed for install/copy workloads.
+
+## Troubleshooting
+
+**Job stuck in "Queued"** — no online runner matches the job's labels. Check
+`lw status` (is the runner online?) and the workflow's `runs-on` (a
+`[self-hosted, macOS]` array must match ALL labels — your runner's are shown
+by `lw status`). Queued jobs auto-cancel after 24 h.
+
+**Runner offline after a reboot** — macOS: automatic login is off (services
+start at login) or FileVault is waiting for a password. Linux: lingering is
+off (`loginctl enable-linger $USER`). `lw doctor` checks both.
+
+**`gh: Requires authentication` in a daemon log** — the service can't reach
+gh's keyring; re-run `lw add … --isolation …` to refresh the injected token
+(also needed if you revoke/rotate your GitHub token).
+
+**Isolated runner never comes online** — first start downloads the base image
+(up to 60 GB for macOS+Xcode); watch `lw logs owner/repo`. Also verify the
+backend prerequisites: `docker info` works, or `tart --version` + `sshpass`.
+
+**Every command asks about an unsupported platform** — Windows outside WSL2
+isn't supported; see Platform support above.
 
 ## Contributing
 
