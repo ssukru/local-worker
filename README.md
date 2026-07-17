@@ -99,6 +99,11 @@ Deploying to an x86 server? Two options that avoid slow emulation:
 2. **Rosetta-backed builds** — OrbStack / Docker Desktop / Colima run amd64
    layers under Rosetta 2, close to native speed for install/copy workloads.
 
+## Contributing
+
+Issues and PRs are welcome. Note for contributors: maintainers run this repo's
+CI on hosted runners — fork PRs never reach anyone's personal machine.
+
 ## Uninstall
 
 ```bash
