@@ -11,6 +11,9 @@ import (
 	"github.com/ssukru/local-worker/internal/ui"
 )
 
+// Overridden at release time via -ldflags "-X main.version=…".
+var version = "dev"
+
 func help() string {
 	return `
 ` + ui.Bold("local-worker") + ` — turn this machine into a self-hosted GitHub Actions runner fleet
@@ -81,7 +84,7 @@ func run() error {
 	args, flags := parseArgv(os.Args[1:])
 	cmd := arg(args, 0)
 
-	if cmd != "" && cmd != "help" && cmd != "--help" {
+	if cmd != "" && cmd != "help" && cmd != "--help" && cmd != "version" && cmd != "--version" {
 		if err := service.AssertPlatform(); err != nil {
 			return err
 		}
@@ -106,6 +109,9 @@ func run() error {
 		return commands.Integrate(arg(args, 1), flags)
 	case "logs":
 		return commands.Logs(arg(args, 1), flags)
+	case "version", "--version":
+		fmt.Println("lw " + version)
+		return nil
 	case "", "help", "--help":
 		fmt.Println(help())
 		return nil

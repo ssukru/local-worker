@@ -27,19 +27,36 @@ you (git push / manual dispatch)
 | Windows | via WSL2 | systemd (inside WSL) | see below; native support: PRs welcome |
 
 **Windows / WSL2:** `wsl --install -d Ubuntu`, enable systemd in `/etc/wsl.conf`
-(`[boot]` → `systemd=true`), then clone this repo inside WSL and run
-`./install.sh`. Your jobs run in Linux — the same environment as GitHub's
+(`[boot]` → `systemd=true`), then install local-worker inside WSL (see
+Install below). Your jobs run in Linux — the same environment as GitHub's
 `ubuntu-*` hosted runners.
 
 ## Install (on the machine that will do the work)
 
+`lw` is a single static Go binary — no runtime dependencies beyond `git` and
+the GitHub CLI (`gh`, which `lw setup` installs if missing).
+
+**Homebrew** (macOS & Linux):
+
 ```bash
-git clone https://github.com/ssukru/local-worker.git
-cd local-worker
-./install.sh        # installs brew/node/gh if missing, then runs `lw setup`
+brew tap ssukru/local-worker https://github.com/ssukru/local-worker.git
+brew install local-worker
 ```
 
-The guided wizard signs you into GitHub (browser device-flow — no tokens to
+**Install script** (downloads the latest release binary):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ssukru/local-worker/main/install.sh | sh
+```
+
+**From source** (needs Go 1.23+):
+
+```bash
+git clone https://github.com/ssukru/local-worker.git
+cd local-worker && go build -o /usr/local/bin/lw ./cmd/lw
+```
+
+Then run `lw setup`. The guided wizard signs you into GitHub (browser device-flow — no tokens to
 copy around), checks the machine (power settings, disk, Docker, Xcode), lets
 you pick which repos send jobs here, and installs everything as launchd
 services that survive reboots.
@@ -88,6 +105,20 @@ runs-on: ${{ inputs.runner || 'self-hosted' }}
 
 Queued jobs wait up to 24 h for a runner to come back — a short home-internet
 outage just delays the job, it doesn't fail it.
+
+### Let an AI agent do the migration
+
+The repo ships an agent skill, [`skills/lw-adapt`](skills/lw-adapt/SKILL.md),
+that walks Claude Code (or any agent that reads skills) through adapting an
+existing repository: preflight checks, patching every workflow with the
+fallback pattern, arch/tooling pitfalls, and end-to-end verification.
+
+```bash
+# make it available in all your projects
+cp -r skills/lw-adapt ~/.claude/skills/
+```
+
+Then, inside the repo you want to migrate: `/lw-adapt`.
 
 ## Staying alive 24/7
 
