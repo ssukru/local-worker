@@ -40,6 +40,7 @@ the GitHub CLI (`gh`, which `lw setup` installs if missing).
 
 ```bash
 brew tap ssukru/local-worker https://github.com/ssukru/local-worker.git
+brew trust ssukru/local-worker   # newer Homebrew requires trusting third-party taps
 brew install local-worker
 ```
 
