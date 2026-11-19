@@ -320,7 +320,7 @@ func addIsolated(repo, name string, labels []string, isolation string, flags *Fl
 	}
 
 	label := util.RunnerLabel(repo)
-	exe, err := os.Executable()
+	exe, err := util.ExecutablePath(os.Args[0])
 	if err != nil {
 		return err
 	}

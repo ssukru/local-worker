@@ -4,34 +4,132 @@ on:
   push:
     tags: ["v*"]
 
-permissions:
-  contents: write
+concurrency:
+  group: release-publish
+  cancel-in-progress: false
 
 jobs:
-  release:
+  build:
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@v5
         with:
-          go-version: "stable"
-      - name: Build binaries
+          go-version-file: go.mod
+      - name: Validate stable release tag
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+            echo "Release tags must be stable semantic versions such as v0.3.0: $GITHUB_REF_NAME" >&2
+            exit 1
+          }
+      - name: Test
+        run: |
+          set -euo pipefail
+          go test ./...
+          go vet ./...
+          sh -n install.sh test/install_test.sh
+          sh test/install_test.sh
+          ruby -c Formula/local-worker.rb
+      - name: Build and verify binaries
         run: |
           set -euo pipefail
           mkdir -p dist
+          version="${GITHUB_REF_NAME#v}"
           for target in darwin/arm64 darwin/amd64 linux/arm64 linux/amd64; do
             os="${target%/*}" arch="${target#*/}"
             GOOS="$os" GOARCH="$arch" CGO_ENABLED=0 \
               go build -trimpath \
-                -ldflags "-s -w -X main.version=${GITHUB_REF_NAME#v}" \
+                -ldflags "-s -w -X main.version=$version" \
                 -o dist/lw ./cmd/lw
+            if [[ "$target" == "linux/amd64" ]]; then
+              [[ "$(dist/lw version)" == "lw $version" ]]
+            fi
             tar -C dist -czf "dist/lw-${GITHUB_REF_NAME}-${os}-${arch}.tar.gz" lw
+            [[ "$(tar -tzf "dist/lw-${GITHUB_REF_NAME}-${os}-${arch}.tar.gz")" == "lw" ]]
             rm dist/lw
           done
-          (cd dist && shasum -a 256 *.tar.gz > checksums.txt)
-      - name: Create release
+          (
+            cd dist
+            printf '%s\n' *.tar.gz | sort | xargs shasum -a 256 > checksums.txt
+            shasum -a 256 -c checksums.txt
+          )
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-assets
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-assets
+          path: dist
+      - name: Verify downloaded artifacts
+        run: |
+          set -euo pipefail
+          (cd dist && shasum -a 256 -c checksums.txt)
+      - name: Create or repair release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/*.tar.gz dist/checksums.txt \
-            --title "$GITHUB_REF_NAME" --generate-notes
+          set -euo pipefail
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/*.tar.gz dist/checksums.txt --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" dist/*.tar.gz dist/checksums.txt \
+              --title "$GITHUB_REF_NAME" --generate-notes
+          fi
+      - name: Update Homebrew formula
+        env:
+          FORMULA_TAG: ${{ github.ref_name }}
+          FORMULA_REVISION: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          git switch -C release-formula origin/main
+          python3 - <<'PY'
+          import os
+          import pathlib
+          import re
+
+          path = pathlib.Path("Formula/local-worker.rb")
+          text = path.read_text()
+          match = re.search(r'tag: "(v[0-9]+\.[0-9]+\.[0-9]+)",\n\s+revision: "[0-9a-f]+"', text)
+          if not match:
+              raise SystemExit("could not locate the formula tag and revision")
+
+          def version(tag):
+              return tuple(int(part) for part in tag.removeprefix("v").split("."))
+
+          target = os.environ["FORMULA_TAG"]
+          if version(match.group(1)) > version(target):
+              print(f"Formula already points to newer release {match.group(1)}; refusing downgrade to {target}")
+          else:
+              replacement = f'tag: "{target}",\n      revision: "{os.environ["FORMULA_REVISION"]}"'
+              updated = text[:match.start()] + replacement + text[match.end():]
+              path.write_text(updated)
+          PY
+          if git diff --quiet -- Formula/local-worker.rb; then
+            echo "Formula does not need an update"
+            exit 0
+          fi
+          ruby -c Formula/local-worker.rb
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/local-worker.rb
+          git commit -m "Brew: update local-worker to $FORMULA_TAG" \
+            -m "Co-Authored-By: Claude <noreply@anthropic.com>"
+          git push origin HEAD:main

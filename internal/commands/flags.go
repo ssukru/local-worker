@@ -1,5 +1,7 @@
 package commands
 
+import "sort"
+
 // Flags holds parsed --flag values; boolean flags are present with an empty
 // value.
 type Flags struct {
@@ -19,5 +21,14 @@ func (f *Flags) Set(key, value string) {
 func (f *Flags) Has(key string) bool   { return f.set[key] }
 func (f *Flags) Get(key string) string { return f.values[key] }
 
-// Bool reports a flag given without a value (e.g. --yes).
+// Bool reports whether a flag was provided (e.g. --yes).
 func (f *Flags) Bool(key string) bool { return f.set[key] }
+
+func (f *Flags) Keys() []string {
+	keys := make([]string, 0, len(f.set))
+	for key := range f.set {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}

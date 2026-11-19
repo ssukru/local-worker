@@ -33,10 +33,31 @@ Install below). Your jobs run in Linux — the same environment as GitHub's
 
 ## Install (on the machine that will do the work)
 
-`lw` is a single static Go binary — no runtime dependencies beyond `git` and
-the GitHub CLI (`gh`, which `lw setup` installs if missing).
+`lw` is a single static Go binary. The quickest path on a new Mac or Linux
+machine is the verified install script:
 
-**Homebrew** (macOS & Linux):
+```bash
+curl -fsSL https://raw.githubusercontent.com/ssukru/local-worker/main/install.sh | sh
+```
+
+A fresh script install always goes to `~/.local/bin/lw`, never uses `sudo`
+(and refuses to run as root), and verifies the release checksum before
+replacing anything. If that directory is
+not already on PATH, add it to your shell profile:
+
+```bash
+# zsh (default on macOS)
+printf '%s\n' 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zprofile
+
+# bash
+printf '%s\n' 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+```
+
+Restart the shell, then install the [GitHub CLI (`gh`)](https://cli.github.com/)
+if it is not present. When Homebrew is available, `lw setup` can offer to run
+`brew install gh`; otherwise it prints the direct installation requirement.
+
+**Homebrew-managed alternative** (macOS & Linux):
 
 ```bash
 brew tap ssukru/local-worker https://github.com/ssukru/local-worker.git
@@ -44,23 +65,18 @@ brew trust ssukru/local-worker   # newer Homebrew requires trusting third-party 
 brew install local-worker
 ```
 
-**Install script** (downloads the latest release binary):
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/ssukru/local-worker/main/install.sh | sh
-```
-
-**From source** (needs Go 1.23+):
+**From source** (needs the Go version declared in `go.mod`):
 
 ```bash
 git clone https://github.com/ssukru/local-worker.git
-cd local-worker && go build -o /usr/local/bin/lw ./cmd/lw
+cd local-worker
+go build -ldflags "-X main.version=dev" -o "$HOME/.local/bin/lw" ./cmd/lw
 ```
 
-Then run `lw setup`. The guided wizard signs you into GitHub (browser device-flow — no tokens to
-copy around), checks the machine (power settings, disk, Docker, Xcode), lets
-you pick which repos send jobs here, and installs everything as launchd
-services that survive reboots.
+Then run `lw setup`. The guided wizard signs you into GitHub (browser
+device-flow — no tokens to copy around), checks the machine (power settings,
+disk, Docker, Xcode), lets you pick which repos send jobs here, and installs
+everything as launchd services that survive reboots.
 
 ## Commands
 
@@ -75,10 +91,46 @@ services that survive reboots.
 | `lw vm status\|refresh owner/repo` | Inspect / rebuild isolated environments |
 | `lw integrate owner/repo` | Copy-paste workflow patch to route jobs here |
 | `lw logs [owner/repo]` | Tail a runner's log |
+| `lw update` | Check for and install a verified release |
 
 `lw add` flags: `--labels a,b,c` · `--name <runner-name>` ·
 `--isolation host|vm|container` · `--vm-image <image>` ·
 `--refresh never|per-job|<n>h` · `--yes` (non-interactive).
+
+## Update
+
+Direct/script installations update themselves in place:
+
+```bash
+lw update --check          # compare the installed and latest versions
+lw update                  # confirm and install the latest stable release
+lw update --to 0.3.0       # install an exact release
+lw update --yes            # unattended update
+```
+
+`--force` is required to reinstall the same version, downgrade, or replace a
+source build that reports `dev`. Every download is checked against the
+release's SHA-256 manifest and staged beside the existing binary before an
+atomic replacement.
+
+Homebrew owns its Cellar files, so `lw update` will not overwrite them. Use:
+
+```bash
+brew update && brew upgrade local-worker
+```
+
+The install script upgrades recognized direct installations in place:
+`~/.local/bin/lw`, an older `/usr/local/bin/lw`, or a custom location explicitly
+selected with `LW_INSTALL_DIR=/custom/bin`. An unrelated `lw` elsewhere on PATH
+is never executed or overwritten; the script asks you to name its directory
+explicitly. If multiple distinct installations are found, it stops and lists
+them rather than guessing which one to replace.
+
+Updates intentionally do not restart active VM/container daemons because that
+could interrupt a job. They load the new binary on their next normal restart.
+Services installed by this version record a stable PATH-level executable; if
+an older Homebrew service captured a versioned Cellar path, reinstall that
+watchdog or isolated runner during an idle maintenance window.
 
 State lives in `~/.local-worker/` (runner instances, logs, config). The
 repo itself stays clean — clone it on as many machines as you like.
@@ -254,8 +306,17 @@ CI on hosted runners — fork PRs never reach anyone's personal machine.
 
 ## Uninstall
 
+Remove runner and watchdog services before deleting local state:
+
 ```bash
-lw remove owner/repo        # per repo
+lw remove owner/repo        # repeat for each repo
 lw watchdog uninstall
 rm -rf ~/.local-worker
+```
+
+Then remove the installation through the channel that owns it:
+
+```bash
+rm -f ~/.local/bin/lw       # direct/script install
+brew uninstall local-worker # Homebrew install
 ```

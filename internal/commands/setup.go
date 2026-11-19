@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"fmt"
 	"os"
 	"regexp"
 	"runtime"
@@ -29,6 +30,9 @@ func Setup(flags *Flags) error {
 
 	// 1. GitHub CLI presence + auth ------------------------------------------
 	if _, ghOK := util.TrySh("gh", []string{"--version"}); !ghOK {
+		if _, brewOK := util.TrySh("brew", []string{"--version"}); !brewOK {
+			return fmt.Errorf("GitHub CLI (gh) is required; install it from https://cli.github.com/ and rerun lw setup")
+		}
 		doInstall, err := ui.Confirm("GitHub CLI (gh) is required and not installed. Install it with Homebrew now?", true)
 		if err != nil || !doInstall {
 			ui.Cancel("Cannot continue without gh.")

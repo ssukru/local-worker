@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Test Go packages
+        run: |
+          go test ./...
+          go vet ./...
+      - name: Test installer and formula syntax
+        run: |
+          sh -n install.sh test/install_test.sh
+          sh test/install_test.sh
+          ruby -c Formula/local-worker.rb
+      - name: Check Homebrew formula style
+        if: runner.os == 'macOS'
+        run: brew style Formula/local-worker.rb

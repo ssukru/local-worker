@@ -37,6 +37,57 @@ func EnsureDirs() error {
 	return nil
 }
 
+// ExecutablePath returns the stable path used to invoke lw without resolving
+// package-manager symlinks into a versioned Cellar path.
+func ExecutablePath(argv0 string) (string, error) {
+	if argv0 == "" {
+		return os.Executable()
+	}
+	value := argv0
+	if !strings.ContainsRune(value, filepath.Separator) {
+		resolved, err := exec.LookPath(value)
+		if err != nil {
+			return "", fmt.Errorf("locate executable %s: %w", value, err)
+		}
+		value = resolved
+	}
+	absolute, err := filepath.Abs(value)
+	if err != nil {
+		return "", err
+	}
+	absolute = filepath.Clean(absolute)
+	info, statErr := os.Lstat(absolute)
+	if statErr == nil && info.Mode()&os.ModeSymlink == 0 {
+		return absolute, nil
+	}
+	if stableExecutableSymlink(absolute) {
+		return absolute, nil
+	}
+	resolved, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Clean(resolved), nil
+}
+
+func stableExecutableSymlink(path string) bool {
+	dir := filepath.Dir(path)
+	if filepath.Base(path) != "lw" {
+		return false
+	}
+	for _, stableDir := range []string{
+		filepath.Join(Home(), ".local", "bin"),
+		"/usr/local/bin",
+		"/opt/homebrew/bin",
+		"/home/linuxbrew/.linuxbrew/bin",
+	} {
+		if dir == stableDir {
+			return true
+		}
+	}
+	return false
+}
+
 // Opt tweaks how a command is run.
 type Opt struct {
 	Dir           string

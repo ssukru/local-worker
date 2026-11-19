@@ -70,7 +70,7 @@ func watchdogInstall(flags *Flags) error {
 		return err
 	}
 
-	exe, err := os.Executable()
+	exe, err := util.ExecutablePath(os.Args[0])
 	if err != nil {
 		return err
 	}

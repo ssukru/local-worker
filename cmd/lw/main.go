@@ -31,6 +31,7 @@ func help() string {
   vm <status|refresh>      Manage isolated (VM/container) runner environments
   integrate <owner/repo>   Print the workflow changes to route jobs here
   logs [owner/repo]        Tail runner / watchdog logs
+  update                   Check for and install a newer lw release
 
 ` + ui.Bold("Common flags:") + `
   --labels a,b,c           Extra runner labels (add)
@@ -46,7 +47,7 @@ Config and runner instances live in ` + ui.Cyan("~/.local-worker") + ` — the r
 // valueFlags take a value; everything else is boolean.
 var valueFlags = map[string]bool{
 	"labels": true, "name": true, "interval": true, "healthchecks": true,
-	"isolation": true, "vm-image": true, "refresh": true,
+	"isolation": true, "vm-image": true, "refresh": true, "to": true,
 }
 
 func parseArgv(argv []string) ([]string, *commands.Flags) {
@@ -63,7 +64,7 @@ func parseArgv(argv []string) ([]string, *commands.Flags) {
 			continue
 		}
 		key := a[2:]
-		if valueFlags[key] && i+1 < len(argv) {
+		if valueFlags[key] && i+1 < len(argv) && !strings.HasPrefix(argv[i+1], "--") {
 			i++
 			flags.Set(key, argv[i])
 		} else {
@@ -83,6 +84,14 @@ func arg(args []string, i int) string {
 func run() error {
 	args, flags := parseArgv(os.Args[1:])
 	cmd := arg(args, 0)
+	if cmd == "" && flags.Has("version") {
+		fmt.Println("lw " + version)
+		return nil
+	}
+	if cmd == "" && flags.Has("help") {
+		fmt.Println(help())
+		return nil
+	}
 
 	if cmd != "" && cmd != "help" && cmd != "--help" && cmd != "version" && cmd != "--version" {
 		if err := service.AssertPlatform(); err != nil {
@@ -109,6 +118,8 @@ func run() error {
 		return commands.Integrate(arg(args, 1), flags)
 	case "logs":
 		return commands.Logs(arg(args, 1), flags)
+	case "update":
+		return commands.Update(version, os.Args[0], args[1:], flags)
 	case "version", "--version":
 		fmt.Println("lw " + version)
 		return nil
