@@ -73,8 +73,31 @@ func DownloadDist(asset Asset) (string, error) {
 	return cacheDir, nil
 }
 
-func Dir(repo string) string {
-	return filepath.Join(util.RunnersDir(), util.RepoID(repo))
+// Dir is the instance directory for a repo's Nth runner slot. Each slot is a
+// full runner install: its own credentials, its own _work tree, its own
+// Runner.Listener process — which is what lets slots take jobs in parallel.
+func Dir(repo string, slot int) string {
+	return filepath.Join(util.RunnersDir(), util.InstanceID(repo, slot))
+}
+
+// LocalSlots reports how many instance directories exist for a repo, probing
+// upward from atLeast. Scaling down (or a config that drifted) leaves
+// higher-numbered instances on disk; this finds them so they can be torn down.
+// owned reports whether a directory belongs to this repo — a repo genuinely
+// named "foo-2" would otherwise be mistaken for slot 2 of "foo".
+func LocalSlots(repo string, atLeast int, owned func(dir string) bool) int {
+	n := atLeast
+	for slot := atLeast + 1; slot <= util.MaxSlots; slot++ {
+		dir := Dir(repo, slot)
+		if _, err := os.Stat(dir); err != nil {
+			break
+		}
+		if owned != nil && !owned(dir) {
+			break
+		}
+		n = slot
+	}
+	return n
 }
 
 func RegistrationToken(repo string) (string, error) {
@@ -95,17 +118,35 @@ func RemovalToken(repo string) (string, error) {
 
 type ConfigureOpts struct {
 	Repo    string
+	Slot    int
 	Name    string
 	Labels  []string
 	DistDir string
+	// Ephemeral registers a runner that accepts exactly one job and then
+	// deregisters itself. The autoscaler relies on this: shrinking the pool
+	// leaves no stale registrations behind on GitHub.
+	Ephemeral bool
 }
 
-// Configure sets up a runner instance for a repo (idempotent via --replace).
+// ClearRegistration deletes an instance's local registration files so it can
+// be configured again. An ephemeral runner removes itself from GitHub after
+// its job but leaves these behind, and config.sh refuses to reconfigure over
+// them. The _work tree is deliberately kept — warm checkouts and caches are
+// most of the speed advantage of a self-hosted runner.
+func ClearRegistration(repo string, slot int) {
+	dir := Dir(repo, slot)
+	for _, name := range []string{".runner", ".credentials", ".credentials_rsaparams"} {
+		os.Remove(filepath.Join(dir, name))
+	}
+}
+
+// Configure sets up a runner instance for a repo slot (idempotent via
+// --replace).
 func Configure(opts ConfigureOpts) (string, error) {
 	if err := util.EnsureDirs(); err != nil {
 		return "", err
 	}
-	dir := Dir(opts.Repo)
+	dir := Dir(opts.Repo, opts.Slot)
 	if _, err := os.Stat(filepath.Join(dir, "config.sh")); err != nil {
 		os.RemoveAll(dir)
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -122,7 +163,7 @@ func Configure(opts ConfigureOpts) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	_, err = util.Sh("./config.sh", []string{
+	args := []string{
 		"--url", "https://github.com/" + opts.Repo,
 		"--token", token,
 		"--name", opts.Name,
@@ -130,16 +171,19 @@ func Configure(opts ConfigureOpts) (string, error) {
 		"--work", "_work",
 		"--unattended",
 		"--replace",
-	}, util.Opt{Dir: dir, QuietStderr: true})
-	if err != nil {
+	}
+	if opts.Ephemeral {
+		args = append(args, "--ephemeral")
+	}
+	if _, err := util.Sh("./config.sh", args, util.Opt{Dir: dir, QuietStderr: true}); err != nil {
 		return "", err
 	}
 	return dir, nil
 }
 
-func InstallService(repo string) (string, error) {
-	label := util.RunnerLabel(repo)
-	dir := Dir(repo)
+func InstallService(repo string, slot int) (string, error) {
+	label := util.RunnerLabel(repo, slot)
+	dir := Dir(repo, slot)
 	err := service.Get().Install(service.Spec{
 		Label:       label,
 		ProgramArgs: []string{filepath.Join(dir, "run.sh")},
@@ -153,13 +197,14 @@ func InstallService(repo string) (string, error) {
 	return label, nil
 }
 
-func UninstallService(repo string) {
-	service.Get().Uninstall(util.RunnerLabel(repo))
+func UninstallService(repo string, slot int) {
+	service.Get().Uninstall(util.RunnerLabel(repo, slot))
 }
 
-// Deregister removes the runner from GitHub and deletes the local instance.
-func Deregister(repo string) {
-	dir := Dir(repo)
+// Deregister removes a slot's runner from GitHub and deletes its local
+// instance.
+func Deregister(repo string, slot int) {
+	dir := Dir(repo, slot)
 	if _, err := os.Stat(filepath.Join(dir, "config.sh")); err == nil {
 		token, ok := util.TrySh("gh", []string{
 			"api", "-X", "POST",
@@ -206,15 +251,29 @@ func FindRemote(runners []RemoteRunner, name string) *RemoteRunner {
 }
 
 // ListenerRunning reports whether the Runner.Listener process for this repo
-// is alive locally.
-func ListenerRunning(repo string) bool {
+// slot is alive locally.
+func ListenerRunning(repo string, slot int) bool {
 	out, ok := util.TrySh("pgrep", []string{"-fl", "Runner.Listener"})
 	if !ok {
 		return false
 	}
-	dir := Dir(repo)
+	dir := Dir(repo, slot)
 	for _, line := range strings.Split(out, "\n") {
-		if strings.Contains(line, dir) {
+		if listenerMatches(line, dir) {
+			return true
+		}
+	}
+	return false
+}
+
+// listenerMatches reports whether a pgrep line belongs to the instance rooted
+// at dir. It matches path components rather than substrings: slot 1's
+// directory is a prefix of every other slot's ("…/owner__repo" vs
+// "…/owner__repo-2"), so a substring test would report slot 1 as running
+// whenever any slot of that repo was.
+func listenerMatches(psLine, dir string) bool {
+	for _, field := range strings.Fields(psLine) {
+		if field == dir || strings.HasPrefix(field, dir+"/") {
 			return true
 		}
 	}

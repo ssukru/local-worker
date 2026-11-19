@@ -93,8 +93,13 @@ consistent with it.
   and global tool state carry over. Don't rely on a clean machine; keep
   `actions/checkout` (it cleans the workspace) and treat leftover state as a
   feature (warm caches) or add `clean: true` where it isn't.
-- **Concurrency**: one runner = one job at a time per repo; parallel matrix
-  jobs will queue. Usually fine for deploys, may slow big test matrices.
+- **Concurrency**: `lw add owner/repo` autoscales by default — one ephemeral
+  runner per queued job, so matrix and fan-out jobs run in parallel with no
+  per-workflow setup. Raise the ceiling with `lw scale owner/repo --max N` if
+  the matrix is wider than the machine's default. Pin deploy-only repos with
+  `--count 1` so two deploys can't race. Parallel jobs on `--isolation host`
+  share ports, the Docker daemon and caches; suggest `--isolation container`
+  when jobs bind fixed ports (isolated pools are fixed-size, not autoscaled).
 - **Docker `services:`/`container:`** need a Docker daemon on the worker
   machine (`docker info`) — on macOS that means OrbStack/Colima/Docker
   Desktop running at login.

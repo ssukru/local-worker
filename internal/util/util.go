@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -137,8 +138,108 @@ func RepoID(repo string) string {
 	return unsafeChars.ReplaceAllString(repo, "__")
 }
 
-func RunnerLabel(repo string) string {
-	return "com.local-worker.runner." + RepoID(repo)
+// MaxSlots caps concurrent runner slots per repo. Each slot is a full runner
+// instance (its own copy of the dist and its own _work tree), so the ceiling
+// is about disk and CPU, not protocol.
+const MaxSlots = 32
+
+// ClampSlots normalises a slot count; 0 (an old config without the field)
+// means one runner.
+func ClampSlots(n int) int {
+	if n < 1 {
+		return 1
+	}
+	if n > MaxSlots {
+		return MaxSlots
+	}
+	return n
+}
+
+// DefaultMaxRunners picks a concurrency ceiling this machine can actually
+// sustain. Cores alone overpromise: CI jobs are usually memory- and IO-bound,
+// so the RAM budget (~4 GB per concurrent job) is the tighter constraint on
+// most laptops. Whichever binds first wins.
+func DefaultMaxRunners() int {
+	byCPU := runtime.NumCPU() / 2
+	byRAM := MachineRAMGb() / 4
+	max := byCPU
+	if byRAM > 0 && byRAM < max {
+		max = byRAM
+	}
+	if max < 2 {
+		max = 2
+	}
+	if max > 8 {
+		// Past this a single desktop machine is rarely the right answer, and
+		// the user can always raise it explicitly.
+		max = 8
+	}
+	return max
+}
+
+// MachineRAMGb returns installed memory in GB, or 0 when it can't be read.
+func MachineRAMGb() int {
+	if runtime.GOOS == "darwin" {
+		out, ok := TrySh("sysctl", []string{"-n", "hw.memsize"})
+		if !ok {
+			return 0
+		}
+		bytes, err := strconv.ParseInt(out, 10, 64)
+		if err != nil {
+			return 0
+		}
+		return int(bytes / (1024 * 1024 * 1024))
+	}
+	raw, err := os.ReadFile("/proc/meminfo")
+	if err != nil {
+		return 0
+	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		if !strings.HasPrefix(line, "MemTotal:") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			return 0
+		}
+		kb, err := strconv.ParseInt(fields[1], 10, 64)
+		if err != nil {
+			return 0
+		}
+		return int(kb / (1024 * 1024))
+	}
+	return 0
+}
+
+// PoolLabel is the service label for a repo's autoscaler daemon. It is
+// distinct from RunnerLabel so an auto pool and leftover fixed-mode runner
+// services can never collide.
+func PoolLabel(repo string) string {
+	return "com.local-worker.pool." + RepoID(repo)
+}
+
+// InstanceID is the filesystem/service-safe id of a repo's Nth runner slot.
+// Slot 1 keeps the bare repo id, so installs made before multi-runner support
+// keep their existing directory, service label and GitHub registration.
+func InstanceID(repo string, slot int) string {
+	id := RepoID(repo)
+	if slot <= 1 {
+		return id
+	}
+	return id + "-" + strconv.Itoa(slot)
+}
+
+func RunnerLabel(repo string, slot int) string {
+	return "com.local-worker.runner." + InstanceID(repo, slot)
+}
+
+// SlotName derives slot N's GitHub-visible runner name from the base name.
+// Slot 1 is the base name unchanged (see InstanceID).
+func SlotName(base string, slot int) string {
+	if slot <= 1 {
+		return base
+	}
+	return base + "-" + strconv.Itoa(slot)
 }
 
 // MachineArch reports arm64/x64 as used in runner asset names. A native Go

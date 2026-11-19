@@ -67,25 +67,94 @@ services that survive reboots.
 | Command | What it does |
 | --- | --- |
 | `lw setup` | Guided first-time setup |
-| `lw add owner/repo` | Attach this machine as a runner for a repo |
+| `lw add owner/repo` | Attach this machine as a runner for a repo (autoscales) |
 | `lw remove owner/repo` | Deregister + clean up |
+| `lw scale owner/repo [max]` | Resize an autoscaling pool (`--min` / `--max`) |
 | `lw status` | Local *and* GitHub's view of every runner |
 | `lw doctor` | Diagnose machine readiness (sleep, auto-login, tools…) |
 | `lw watchdog install\|uninstall\|check\|status` | Self-healing checks + offline alerting |
 | `lw vm status\|refresh owner/repo` | Inspect / rebuild isolated environments |
 | `lw integrate owner/repo` | Copy-paste workflow patch to route jobs here |
-| `lw logs [owner/repo]` | Tail a runner's log |
+| `lw logs [owner/repo] [--slot N]` | Tail a runner's log |
 
-`lw add` flags: `--labels a,b,c` · `--name <runner-name>` ·
+`lw add` flags: `--min N` · `--max N` · `--count N` · `--labels a,b,c` · `--name <runner-name>` ·
 `--isolation host|vm|container` · `--vm-image <image>` ·
 `--refresh never|per-job|<n>h` · `--yes` (non-interactive).
 
 State lives in `~/.local-worker/` (runner instances, logs, config). The
 repo itself stays clean — clone it on as many machines as you like.
 
-Each attached repo gets one runner, and a runner executes one job at a time —
-so different repos run in parallel, while jobs within a repo queue (usually
-what you want for deploys). Multiple runners per repo isn't supported yet.
+## Concurrency: it scales itself
+
+A GitHub Actions runner executes **one job at a time**. Rather than making you
+size a runner pool by hand, `lw` does what GitHub-hosted runners appear to do:
+
+```bash
+lw add owner/repo     # that's it — autoscaling is the default
+```
+
+An autoscaler daemon watches the repo's job queue and keeps **one ephemeral
+runner per queued job**. Trigger 6 jobs and 6 runners start; when the queue
+drains they retire themselves. Nothing to configure per workflow, and no
+runner count to keep in sync with your matrix size.
+
+```
+queue:  ██████ 6 jobs
+pool:   idle(1) → starts 5 more → 6 running → jobs finish → back to idle(1)
+```
+
+Each runner registers with `--ephemeral`, so it accepts exactly one job and
+deregisters itself. Scaling down leaves nothing stale behind on GitHub.
+
+### Bounds
+
+| | default | meaning |
+| --- | --- | --- |
+| `--min` | `1` | runners kept warm, so a single job starts instantly |
+| `--max` | machine-sized | ceiling on parallel jobs |
+
+The default ceiling is derived from this machine — cores ÷ 2, capped by a
+~4 GB-per-job memory budget, because CI jobs hit RAM before they hit cores.
+Check it with `lw status`, change it any time:
+
+```bash
+lw scale owner/repo --max 10    # raise the ceiling
+lw scale owner/repo --min 0     # fully cold: no idle runners at all
+lw scale owner/repo             # just show the current pool
+```
+
+`lw scale` takes effect within seconds — the daemon re-reads its config every
+poll. Nothing restarts and jobs in flight are never interrupted.
+
+### Fixed pools
+
+When you want an exact number instead — deploy repos are the usual case, so
+two deploys can't race — pin it:
+
+```bash
+lw add owner/repo --count 1     # exactly one runner, no autoscaling
+lw add owner/repo --count 3     # exactly three
+```
+
+Fixed pools are permanent registrations with one service each, which is also
+what every repo attached before autoscaling existed keeps using. Upgrading
+`lw` never silently converts them; re-run `lw add` with `--min`/`--max` to opt
+a repo in.
+
+### What to watch out for
+
+Parallel jobs share one machine, so raising `--max` isn't free:
+
+- **RAM** is usually the first wall — N concurrent Node/Xcode builds means N
+  times the memory.
+- **Disk**: each runner keeps its own checkout and runner copy (~200 MB before
+  your dependencies).
+- **Shared host state.** On `--isolation host` parallel jobs collide on fixed
+  ports, one Docker daemon, and package-manager caches. Most caches tolerate
+  concurrent access; fixed ports do not. If your jobs bind ports, use
+  `--isolation container`.
+- **Autoscaling is host-only.** VM/container isolation uses fixed pools —
+  booting a fresh VM per job is too slow to scale on demand.
 
 ## Routing jobs to your Mac
 

@@ -40,8 +40,10 @@ var DefaultImages = map[string]string{
 const sshUser = "admin"
 const sshPass = "admin"
 
-func Name(repo string) string {
-	return "lw-" + strings.ToLower(util.RepoID(repo))
+// Name is the Tart VM name backing a repo's Nth runner slot — one VM per
+// slot, so slots stay isolated from each other as well as from the host.
+func Name(repo string, slot int) string {
+	return "lw-" + strings.ToLower(util.InstanceID(repo, slot))
 }
 
 func TartAvailable() bool {
@@ -238,16 +240,20 @@ func provisionRunner(ip string, opts provisionOpts) error {
 
 // -------------------------------------------------------------------- daemon
 
-// Daemon is the long-running per-repo VM daemon; stdout/stderr go to the
-// service log.
-func Daemon(repo string) error {
-	log := func(msg string) { fmt.Printf("[%s] %s\n", util.Timestamp(), msg) }
+// Daemon is the long-running daemon owning one repo slot's VM; stdout/stderr
+// go to the service log. Slots run as independent daemons, one service each.
+func Daemon(repo string, slot int) error {
+	prefix := ""
+	if slot > 1 {
+		prefix = fmt.Sprintf("#%d ", slot)
+	}
+	log := func(msg string) { fmt.Printf("[%s] %s%s\n", util.Timestamp(), prefix, msg) }
 	if err := AssertSupport(); err != nil {
 		return err
 	}
 
 	for {
-		err := daemonCycle(repo, log)
+		err := daemonCycle(repo, slot, log)
 		if err == errNoLongerConfigured {
 			return nil
 		}
@@ -260,15 +266,19 @@ func Daemon(repo string) error {
 
 var errNoLongerConfigured = errors.New("no longer configured")
 
-func daemonCycle(repo string, log func(string)) error {
+func daemonCycle(repo string, slot int, log func(string)) error {
 	cfg := config.Load()
 	entry := config.FindRunner(&cfg, repo)
 	if entry == nil || entry.VM == nil {
 		log(repo + " no longer configured for VM isolation — exiting.")
 		return errNoLongerConfigured
 	}
+	if slot > entry.Slots() {
+		log(fmt.Sprintf("%s scaled down to %d runners — slot %d exiting.", repo, entry.Slots(), slot))
+		return errNoLongerConfigured
+	}
 	image, refresh := entry.VM.Image, entry.VM.Refresh
-	name := Name(repo)
+	name := Name(repo, slot)
 	state := ReadState(name)
 
 	if !Exists(name) || refreshDue(refresh, state) || (state != nil && state.RecreateRequested) {
@@ -308,7 +318,7 @@ func daemonCycle(repo string, log func(string)) error {
 	ephemeral := refresh == "per-job"
 	if err := provisionRunner(ip, provisionOpts{
 		repo:      repo,
-		name:      entry.Name,
+		name:      entry.SlotName(slot),
 		labels:    append(append([]string{}, entry.Labels...), "vm"),
 		ephemeral: ephemeral,
 	}); err != nil {

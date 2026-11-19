@@ -25,8 +25,10 @@ import (
 
 const DefaultImage = "ghcr.io/actions/actions-runner:latest"
 
-func Name(repo string) string {
-	return "lw-" + strings.ToLower(util.RepoID(repo))
+// Name is the container backing a repo's Nth runner slot — one container per
+// slot, so slots stay isolated from each other as well as from the host.
+func Name(repo string, slot int) string {
+	return "lw-" + strings.ToLower(util.InstanceID(repo, slot))
 }
 
 func DockerAvailable() bool {
@@ -104,15 +106,19 @@ func configureRunner(name string, opts configureOpts) error {
 	return execRun(name, cmd)
 }
 
-// Daemon is the long-running per-repo container daemon; mirrors vm.Daemon.
-func Daemon(repo string) error {
-	log := func(msg string) { fmt.Printf("[%s] %s\n", util.Timestamp(), msg) }
+// Daemon owns one repo slot's container; mirrors vm.Daemon.
+func Daemon(repo string, slot int) error {
+	prefix := ""
+	if slot > 1 {
+		prefix = fmt.Sprintf("#%d ", slot)
+	}
+	log := func(msg string) { fmt.Printf("[%s] %s%s\n", util.Timestamp(), prefix, msg) }
 	if err := AssertSupport(); err != nil {
 		return err
 	}
 
 	for {
-		err := daemonCycle(repo, log)
+		err := daemonCycle(repo, slot, log)
 		if err == errNoLongerConfigured {
 			return nil
 		}
@@ -125,15 +131,19 @@ func Daemon(repo string) error {
 
 var errNoLongerConfigured = errors.New("no longer configured")
 
-func daemonCycle(repo string, log func(string)) error {
+func daemonCycle(repo string, slot int, log func(string)) error {
 	cfg := config.Load()
 	entry := config.FindRunner(&cfg, repo)
 	if entry == nil || entry.VM == nil {
 		log(repo + " no longer configured for container isolation — exiting.")
 		return errNoLongerConfigured
 	}
+	if slot > entry.Slots() {
+		log(fmt.Sprintf("%s scaled down to %d runners — slot %d exiting.", repo, entry.Slots(), slot))
+		return errNoLongerConfigured
+	}
 	image, refresh := entry.VM.Image, entry.VM.Refresh
-	name := Name(repo)
+	name := Name(repo, slot)
 	state := vm.ReadState(name)
 
 	if !exists(name) || refreshDue(refresh, state) || (state != nil && state.RecreateRequested) {
@@ -168,7 +178,7 @@ func daemonCycle(repo string, log func(string)) error {
 	ephemeral := refresh == "per-job"
 	if err := configureRunner(name, configureOpts{
 		repo:       repo,
-		runnerName: entry.Name,
+		runnerName: entry.SlotName(slot),
 		labels:     append(append([]string{}, entry.Labels...), "container"),
 		ephemeral:  ephemeral,
 	}); err != nil {

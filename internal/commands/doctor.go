@@ -182,10 +182,30 @@ func CollectChecks(forSetup bool) []check {
 		// Services
 		svc := service.Get()
 		for _, r := range cfg.Runners {
-			if svc.IsLoaded(util.RunnerLabel(r.Repo)) {
+			if r.Auto() {
+				if svc.IsLoaded(util.PoolLabel(r.Repo)) {
+					checks = append(checks, ok(fmt.Sprintf("Autoscaler running: %s (%d-%d runners)",
+						r.Repo, r.MinRunners(), r.MaxRunners())))
+				} else {
+					checks = append(checks, bad("Autoscaler NOT running: "+r.Repo+" — re-run: lw add "+r.Repo))
+				}
+				continue
+			}
+			loaded := 0
+			for slot := 1; slot <= r.Slots(); slot++ {
+				if svc.IsLoaded(util.RunnerLabel(r.Repo, slot)) {
+					loaded++
+				}
+			}
+			switch {
+			case loaded == r.Slots() && r.Slots() == 1:
 				checks = append(checks, ok("Runner service loaded: "+r.Repo))
-			} else {
-				checks = append(checks, bad("Runner service NOT loaded: "+r.Repo+" — re-run: lw add "+r.Repo))
+			case loaded == r.Slots():
+				checks = append(checks, ok(fmt.Sprintf("Runner services loaded: %s (%d runners)", r.Repo, r.Slots())))
+			default:
+				checks = append(checks, bad(fmt.Sprintf(
+					"Runner services NOT loaded: %s (%d/%d up) — re-run: lw add %s --count %d",
+					r.Repo, loaded, r.Slots(), r.Repo, r.Slots())))
 			}
 		}
 		if cfg.Watchdog.Installed {

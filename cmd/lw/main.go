@@ -24,6 +24,7 @@ func help() string {
   setup                    Guided first-time setup (deps, auth, repos, watchdog)
   add [owner/repo]         Attach this machine as a runner for a repo
   remove <owner/repo>      Detach a runner and clean up
+  scale <owner/repo> [max] Resize an autoscaling pool (--min / --max)
   status                   Local + GitHub view of all runners
   doctor                   Diagnose machine readiness (power, tools, network)
   watchdog <install|uninstall|check|status>
@@ -33,11 +34,22 @@ func help() string {
   logs [owner/repo]        Tail runner / watchdog logs
 
 ` + ui.Bold("Common flags:") + `
+  --min N / --max N        add/scale: bounds of the autoscaling pool
+  --count N                add: fixed pool of N runners (disables autoscaling)
   --labels a,b,c           Extra runner labels (add)
   --isolation <mode>       add: host (default) | vm (Tart, Apple Silicon) | container (Docker)
   --vm-image <image>       add: base image for vm/container isolation
   --refresh <policy>       add: never (default) | per-job | interval like 24h
+  --slot N                 logs / vm refresh: target one runner of a repo
   --yes                    Skip confirmations (non-interactive)
+
+` + ui.Bold("Parallel jobs (automatic):") + `
+  ` + ui.Cyan("lw add owner/repo") + ` autoscales by default — nothing to configure.
+  A runner runs one job, so the pool watches the repo's queue and starts one
+  runner per queued job, then shrinks back when the queue drains. Queue 6
+  jobs, 6 run in parallel (up to --max, which defaults to what this machine
+  can take). Resize with ` + ui.Cyan("lw scale owner/repo --max 10") + `, or pin a fixed
+  pool with ` + ui.Cyan("--count N") + `.
 
 Config and runner instances live in ` + ui.Cyan("~/.local-worker") + ` — the repo itself stays clean.
 `
@@ -47,6 +59,7 @@ Config and runner instances live in ` + ui.Cyan("~/.local-worker") + ` — the r
 var valueFlags = map[string]bool{
 	"labels": true, "name": true, "interval": true, "healthchecks": true,
 	"isolation": true, "vm-image": true, "refresh": true,
+	"count": true, "slot": true, "min": true, "max": true,
 }
 
 func parseArgv(argv []string) ([]string, *commands.Flags) {
@@ -97,6 +110,10 @@ func run() error {
 		return commands.Add(arg(args, 1), flags, false)
 	case "remove":
 		return commands.Remove(arg(args, 1), flags)
+	case "scale":
+		return commands.Scale(arg(args, 1), arg(args, 2), flags)
+	case "pool":
+		return commands.Pool(arg(args, 1), arg(args, 2), flags)
 	case "status":
 		return commands.Status(flags)
 	case "doctor":
